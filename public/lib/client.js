@@ -1,4 +1,51 @@
 ;(function(e,t,n){function i(n,s){if(!t[n]){if(!e[n]){var o=typeof require=="function"&&require;if(!s&&o)return o(n,!0);if(r)return r(n,!0);throw new Error("Cannot find module '"+n+"'")}var u=t[n]={exports:{}};e[n][0].call(u.exports,function(t){var r=e[n][1][t];return i(r?r:t)},u,u.exports)}return t[n].exports}var r=typeof require=="function"&&require;for(var s=0;s<n.length;s++)i(n[s]);return i})({1:[function(require,module,exports){
+
+vertexShaderStr = [
+  "attribute vec2 a_position;",
+  "attribute vec2 a_textureCoord;",
+    
+  "uniform vec2 u_offset;",
+  "uniform float u_scale;",
+    
+  "varying vec2 v_textureCoord;",
+    
+  "void main() {",
+    "vec2 position = a_position + u_offset;",
+    "position = position * u_scale;",
+    "gl_Position = vec4(position, 0.0, 1.0);",
+    
+    // Pass coordinate to fragment shader
+    "v_textureCoord = a_textureCoord;",
+  "}"
+].join("\n");
+
+fragmentShaderStr = [
+  "precision mediump float;",
+    
+  "uniform sampler2D u_texture;",
+  "uniform sampler2D u_depth1;",
+  "uniform sampler2D u_depth2;",
+  
+  "varying vec2 v_textureCoord;",
+  
+  "void main() {",
+      "vec4 texture_pixel = texture2D(u_texture, v_textureCoord);",
+      "vec4 depth_pixel = texture2D(u_depth1, v_textureCoord/4);",
+      "vec4 pixel = texture_pixel - 0.4 * depth_pixel;",
+      "gl_FragColor = pixel;",
+  "}"
+
+].join("\n");
+
+var gl;
+
+loadShader = function(source, type) {
+  shader = gl.createShader(type)
+  gl.shaderSource(shader, source)
+  gl.compileShader(shader)
+  return shader
+}
+
 var websocket = require('websocket-stream');
 
 var socketVideo = websocket('ws://localhost:2002');
@@ -10,50 +57,96 @@ var width = 640;
 var height = 480;
 var bytearray;
 
-var ctxVideo = document.getElementById('video').getContext('2d');
+
+gl = document.getElementById("webgl").getContext('experimental-webgl');
 var ctxDepth = document.getElementById('depth').getContext('2d');
 
-//video vis
+gl.viewport(0, 0, width, height);
+vertexShader = loadShader(vertexShaderStr, gl.VERTEX_SHADER)
+fragmentShader = loadShader(fragmentShaderStr, gl.FRAGMENT_SHADER)
+
+var program = gl.createProgram();
+gl.attachShader(program, vertexShader);
+gl.attachShader(program, fragmentShader);
+gl.linkProgram(program);
+gl.useProgram(program);
+
+positionLocation  = gl.getAttribLocation(program, 'a_position')
+texCoordLocation  = gl.getAttribLocation(program, 'a_textureCoord')
+offsetLocation    = gl.getUniformLocation(program, 'u_offset')
+scaleLocation     = gl.getUniformLocation(program, 'u_scale')
+
+uTexture = gl.getUniformLocation(program, "u_texture");
+uDepth1 = gl.getUniformLocation(program, "u_depth1");
+uDepth2 = gl.getUniformLocation(program, "u_depth2");
+
+gl.uniform1i(uTexture, 0);
+gl.uniform1i(uDepth1, 1);
+gl.uniform1i(uDepth2, 2);
+
+gl.uniform2f(offsetLocation, -width / 2, -height / 2);
+gl.uniform1f(scaleLocation, 2 / width);
+
+
+texCoordBuffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+gl.bufferData(
+  gl.ARRAY_BUFFER,
+  new Float32Array([0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]),
+  gl.STATIC_DRAW
+);
+gl.enableVertexAttribArray(texCoordLocation);
+gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 0, 0);
+
+buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.enableVertexAttribArray(positionLocation);
+gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+x1 = 0;
+x2 = width;
+y1 = 0;
+y2 = height + 100;
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([x1, y1, x2, y1, x1, y2, x1, y2, x2, y1, x2, y2]), gl.STATIC_DRAW);
+
+gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+for (var i = 0; i < 3; i++) {
+  gl.activeTexture(gl.TEXTURE0 + i);
+  texture = gl.createTexture();
+
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+
+// Receive image from Kinect
+var imageByteArray;
 
 socketVideo.on('data', function (data) {
-  var bytearray = new Uint8Array(data);
-  var imgdata = ctxVideo.getImageData(0,0, width, height);
-  var imgdatalen = imgdata.data.length;
-
-  oldData = []
-
-  for(var i = 0 ; i< 307200 ; i++){
-    oldData[i] = 0
-  }
-
-  console.log("got data")
-  for(var i=0;i<imgdatalen/4;i++){
-
-    
-     //for video feed . bytearray [r,g,b,r,g,b...]
-    imgdata.data[4*i] = bytearray[3*i];
-    imgdata.data[4*i+1] = bytearray[3*i+1];
-    imgdata.data[4*i+2] = bytearray[3*i+2];
-    imgdata.data[4*i+3] = 255;
-    
-
-    //for depth feed  . bytearray  [val , mult, val2, mult2, ...]
-    // var depth = (bytearray[2*i]+bytearray[2*i+1]*255)/5;
-    // imgdata.data[4*i] = depth;
-    // imgdata.data[4*i+1] = depth;
-    // imgdata.data[4*i+2] = depth;
-    // imgdata.data[4*i+3] = 255;
-  }
-  ctxVideo.putImageData(imgdata,0,0)
-
+  imageByteArray = new Uint8Array(data);
 });
 
+// Receive one depth mask from Kinect
+
+
+var oldData;
 
 
 socketDepth.on('data', function (data) {
+
+
+  gl.activeTexture(gl.TEXTURE0 + 1);
+
+
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, width, height, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(data));
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
   var bytearray = new Uint8Array(data);
   var imgdata = ctxDepth.getImageData(0,0, width, height);
   var imgdatalen = imgdata.data.length;
+
 
   for(var i=0;i<imgdatalen/4;i++){
 
@@ -67,21 +160,33 @@ socketDepth.on('data', function (data) {
     
 
     // for depth feed  . bytearray  [val , mult, val2, mult2, ...]
+
     var depth = (bytearray[2*i]+bytearray[2*i+1]*255)/5 ;
+    var od;
+    if(oldData){
+      od = (oldData[2*i]+oldData[2*i+1]*255)/5;
+    }
+    else {
+      od = 0
+    }
+
     
     // oldDepth = depth[i]
 
     // d = depth-oldDepth
     // console.log(d)
 
-    imgdata.data[4*i] = depth
-    imgdata.data[4*i+1] = depth
-    imgdata.data[4*i+2] = depth
+    var diff = depth -od 
+
+    imgdata.data[4*i] = Math.abs( (depth -od)*1000)
+    imgdata.data[4*i+1] = Math.abs( - (depth -od)*1000)
+    imgdata.data[4*i+2] = (depth -od)*1000
     imgdata.data[4*i+3] = 255;
     
     // oldData[i]= depth
 
   }
+  oldData = bytearray
   ctxDepth.putImageData(imgdata,0,0)
 
 });
@@ -97,127 +202,6 @@ socketDepth.on('end', function(){
   socket.close();
 });
 },{"websocket-stream":2}],3:[function(require,module,exports){
-var events = require('events');
-var util = require('util');
-
-function Stream() {
-  events.EventEmitter.call(this);
-}
-util.inherits(Stream, events.EventEmitter);
-module.exports = Stream;
-// Backwards-compat with node 0.4.x
-Stream.Stream = Stream;
-
-Stream.prototype.pipe = function(dest, options) {
-  var source = this;
-
-  function ondata(chunk) {
-    if (dest.writable) {
-      if (false === dest.write(chunk) && source.pause) {
-        source.pause();
-      }
-    }
-  }
-
-  source.on('data', ondata);
-
-  function ondrain() {
-    if (source.readable && source.resume) {
-      source.resume();
-    }
-  }
-
-  dest.on('drain', ondrain);
-
-  // If the 'end' option is not supplied, dest.end() will be called when
-  // source gets the 'end' or 'close' events.  Only dest.end() once, and
-  // only when all sources have ended.
-  if (!dest._isStdio && (!options || options.end !== false)) {
-    dest._pipeCount = dest._pipeCount || 0;
-    dest._pipeCount++;
-
-    source.on('end', onend);
-    source.on('close', onclose);
-  }
-
-  var didOnEnd = false;
-  function onend() {
-    if (didOnEnd) return;
-    didOnEnd = true;
-
-    dest._pipeCount--;
-
-    // remove the listeners
-    cleanup();
-
-    if (dest._pipeCount > 0) {
-      // waiting for other incoming streams to end.
-      return;
-    }
-
-    dest.end();
-  }
-
-
-  function onclose() {
-    if (didOnEnd) return;
-    didOnEnd = true;
-
-    dest._pipeCount--;
-
-    // remove the listeners
-    cleanup();
-
-    if (dest._pipeCount > 0) {
-      // waiting for other incoming streams to end.
-      return;
-    }
-
-    dest.destroy();
-  }
-
-  // don't leave dangling pipes when there are errors.
-  function onerror(er) {
-    cleanup();
-    if (this.listeners('error').length === 0) {
-      throw er; // Unhandled stream error in pipe.
-    }
-  }
-
-  source.on('error', onerror);
-  dest.on('error', onerror);
-
-  // remove all the event listeners that were added.
-  function cleanup() {
-    source.removeListener('data', ondata);
-    dest.removeListener('drain', ondrain);
-
-    source.removeListener('end', onend);
-    source.removeListener('close', onclose);
-
-    source.removeListener('error', onerror);
-    dest.removeListener('error', onerror);
-
-    source.removeListener('end', cleanup);
-    source.removeListener('close', cleanup);
-
-    dest.removeListener('end', cleanup);
-    dest.removeListener('close', cleanup);
-  }
-
-  source.on('end', cleanup);
-  source.on('close', cleanup);
-
-  dest.on('end', cleanup);
-  dest.on('close', cleanup);
-
-  dest.emit('pipe', source);
-
-  // Allow for unix-like usage: A.pipe(B).pipe(C)
-  return dest;
-};
-
-},{"events":4,"util":5}],5:[function(require,module,exports){
 var events = require('events');
 
 exports.isArray = isArray;
@@ -570,7 +554,128 @@ exports.format = function(f) {
   return str;
 };
 
-},{"events":4}],6:[function(require,module,exports){
+},{"events":4}],5:[function(require,module,exports){
+var events = require('events');
+var util = require('util');
+
+function Stream() {
+  events.EventEmitter.call(this);
+}
+util.inherits(Stream, events.EventEmitter);
+module.exports = Stream;
+// Backwards-compat with node 0.4.x
+Stream.Stream = Stream;
+
+Stream.prototype.pipe = function(dest, options) {
+  var source = this;
+
+  function ondata(chunk) {
+    if (dest.writable) {
+      if (false === dest.write(chunk) && source.pause) {
+        source.pause();
+      }
+    }
+  }
+
+  source.on('data', ondata);
+
+  function ondrain() {
+    if (source.readable && source.resume) {
+      source.resume();
+    }
+  }
+
+  dest.on('drain', ondrain);
+
+  // If the 'end' option is not supplied, dest.end() will be called when
+  // source gets the 'end' or 'close' events.  Only dest.end() once, and
+  // only when all sources have ended.
+  if (!dest._isStdio && (!options || options.end !== false)) {
+    dest._pipeCount = dest._pipeCount || 0;
+    dest._pipeCount++;
+
+    source.on('end', onend);
+    source.on('close', onclose);
+  }
+
+  var didOnEnd = false;
+  function onend() {
+    if (didOnEnd) return;
+    didOnEnd = true;
+
+    dest._pipeCount--;
+
+    // remove the listeners
+    cleanup();
+
+    if (dest._pipeCount > 0) {
+      // waiting for other incoming streams to end.
+      return;
+    }
+
+    dest.end();
+  }
+
+
+  function onclose() {
+    if (didOnEnd) return;
+    didOnEnd = true;
+
+    dest._pipeCount--;
+
+    // remove the listeners
+    cleanup();
+
+    if (dest._pipeCount > 0) {
+      // waiting for other incoming streams to end.
+      return;
+    }
+
+    dest.destroy();
+  }
+
+  // don't leave dangling pipes when there are errors.
+  function onerror(er) {
+    cleanup();
+    if (this.listeners('error').length === 0) {
+      throw er; // Unhandled stream error in pipe.
+    }
+  }
+
+  source.on('error', onerror);
+  dest.on('error', onerror);
+
+  // remove all the event listeners that were added.
+  function cleanup() {
+    source.removeListener('data', ondata);
+    dest.removeListener('drain', ondrain);
+
+    source.removeListener('end', onend);
+    source.removeListener('close', onclose);
+
+    source.removeListener('error', onerror);
+    dest.removeListener('error', onerror);
+
+    source.removeListener('end', cleanup);
+    source.removeListener('close', cleanup);
+
+    dest.removeListener('end', cleanup);
+    dest.removeListener('close', cleanup);
+  }
+
+  source.on('end', cleanup);
+  source.on('close', cleanup);
+
+  dest.on('end', cleanup);
+  dest.on('close', cleanup);
+
+  dest.emit('pipe', source);
+
+  // Allow for unix-like usage: A.pipe(B).pipe(C)
+  return dest;
+};
+
+},{"events":4,"util":3}],6:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -870,7 +975,7 @@ WebsocketStream.prototype.end = function() {
   this.ws.close()
 }
 
-},{"stream":3,"util":5,"isbuffer":7}],7:[function(require,module,exports){
+},{"stream":5,"util":3,"isbuffer":7}],7:[function(require,module,exports){
 (function(){var Buffer = require('buffer').Buffer;
 
 module.exports = isBuffer;
@@ -1198,7 +1303,93 @@ assert.doesNotThrow = function(block, /*optional*/error, /*optional*/message) {
 assert.ifError = function(err) { if (err) {throw err;}};
 
 })()
-},{"util":5,"buffer":8}],8:[function(require,module,exports){
+},{"util":3,"buffer":8}],10:[function(require,module,exports){
+exports.readIEEE754 = function(buffer, offset, isBE, mLen, nBytes) {
+  var e, m,
+      eLen = nBytes * 8 - mLen - 1,
+      eMax = (1 << eLen) - 1,
+      eBias = eMax >> 1,
+      nBits = -7,
+      i = isBE ? 0 : (nBytes - 1),
+      d = isBE ? 1 : -1,
+      s = buffer[offset + i];
+
+  i += d;
+
+  e = s & ((1 << (-nBits)) - 1);
+  s >>= (-nBits);
+  nBits += eLen;
+  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8);
+
+  m = e & ((1 << (-nBits)) - 1);
+  e >>= (-nBits);
+  nBits += mLen;
+  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8);
+
+  if (e === 0) {
+    e = 1 - eBias;
+  } else if (e === eMax) {
+    return m ? NaN : ((s ? -1 : 1) * Infinity);
+  } else {
+    m = m + Math.pow(2, mLen);
+    e = e - eBias;
+  }
+  return (s ? -1 : 1) * m * Math.pow(2, e - mLen);
+};
+
+exports.writeIEEE754 = function(buffer, value, offset, isBE, mLen, nBytes) {
+  var e, m, c,
+      eLen = nBytes * 8 - mLen - 1,
+      eMax = (1 << eLen) - 1,
+      eBias = eMax >> 1,
+      rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0),
+      i = isBE ? (nBytes - 1) : 0,
+      d = isBE ? -1 : 1,
+      s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0;
+
+  value = Math.abs(value);
+
+  if (isNaN(value) || value === Infinity) {
+    m = isNaN(value) ? 1 : 0;
+    e = eMax;
+  } else {
+    e = Math.floor(Math.log(value) / Math.LN2);
+    if (value * (c = Math.pow(2, -e)) < 1) {
+      e--;
+      c *= 2;
+    }
+    if (e + eBias >= 1) {
+      value += rt / c;
+    } else {
+      value += rt * Math.pow(2, 1 - eBias);
+    }
+    if (value * c >= 2) {
+      e++;
+      c /= 2;
+    }
+
+    if (e + eBias >= eMax) {
+      m = 0;
+      e = eMax;
+    } else if (e + eBias >= 1) {
+      m = (value * c - 1) * Math.pow(2, mLen);
+      e = e + eBias;
+    } else {
+      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen);
+      e = 0;
+    }
+  }
+
+  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8);
+
+  e = (e << mLen) | m;
+  eLen += mLen;
+  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8);
+
+  buffer[offset + i - d] |= s * 128;
+};
+
+},{}],8:[function(require,module,exports){
 (function(){function SlowBuffer (size) {
     this.length = size;
 };
@@ -2518,93 +2709,7 @@ SlowBuffer.prototype.writeDoubleLE = Buffer.prototype.writeDoubleLE;
 SlowBuffer.prototype.writeDoubleBE = Buffer.prototype.writeDoubleBE;
 
 })()
-},{"assert":9,"./buffer_ieee754":10,"base64-js":11}],10:[function(require,module,exports){
-exports.readIEEE754 = function(buffer, offset, isBE, mLen, nBytes) {
-  var e, m,
-      eLen = nBytes * 8 - mLen - 1,
-      eMax = (1 << eLen) - 1,
-      eBias = eMax >> 1,
-      nBits = -7,
-      i = isBE ? 0 : (nBytes - 1),
-      d = isBE ? 1 : -1,
-      s = buffer[offset + i];
-
-  i += d;
-
-  e = s & ((1 << (-nBits)) - 1);
-  s >>= (-nBits);
-  nBits += eLen;
-  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8);
-
-  m = e & ((1 << (-nBits)) - 1);
-  e >>= (-nBits);
-  nBits += mLen;
-  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8);
-
-  if (e === 0) {
-    e = 1 - eBias;
-  } else if (e === eMax) {
-    return m ? NaN : ((s ? -1 : 1) * Infinity);
-  } else {
-    m = m + Math.pow(2, mLen);
-    e = e - eBias;
-  }
-  return (s ? -1 : 1) * m * Math.pow(2, e - mLen);
-};
-
-exports.writeIEEE754 = function(buffer, value, offset, isBE, mLen, nBytes) {
-  var e, m, c,
-      eLen = nBytes * 8 - mLen - 1,
-      eMax = (1 << eLen) - 1,
-      eBias = eMax >> 1,
-      rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0),
-      i = isBE ? (nBytes - 1) : 0,
-      d = isBE ? -1 : 1,
-      s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0;
-
-  value = Math.abs(value);
-
-  if (isNaN(value) || value === Infinity) {
-    m = isNaN(value) ? 1 : 0;
-    e = eMax;
-  } else {
-    e = Math.floor(Math.log(value) / Math.LN2);
-    if (value * (c = Math.pow(2, -e)) < 1) {
-      e--;
-      c *= 2;
-    }
-    if (e + eBias >= 1) {
-      value += rt / c;
-    } else {
-      value += rt * Math.pow(2, 1 - eBias);
-    }
-    if (value * c >= 2) {
-      e++;
-      c /= 2;
-    }
-
-    if (e + eBias >= eMax) {
-      m = 0;
-      e = eMax;
-    } else if (e + eBias >= 1) {
-      m = (value * c - 1) * Math.pow(2, mLen);
-      e = e + eBias;
-    } else {
-      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen);
-      e = 0;
-    }
-  }
-
-  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8);
-
-  e = (e << mLen) | m;
-  eLen += mLen;
-  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8);
-
-  buffer[offset + i - d] |= s * 128;
-};
-
-},{}],11:[function(require,module,exports){
+},{"assert":9,"./buffer_ieee754":10,"base64-js":11}],11:[function(require,module,exports){
 (function (exports) {
 	'use strict';
 
