@@ -177,9 +177,9 @@ socketDepth.on('data', function (data) {
 
     var diff = depth -od 
 
-    imgdata.data[4*i] =  (depth -od)*1000
+    imgdata.data[4*i] =  (depth -od)*500
     imgdata.data[4*i+1] = 0 
-    imgdata.data[4*i+2] =   - (depth -od)*1000
+    imgdata.data[4*i+2] =   - (depth -od)*500
     imgdata.data[4*i+3] = 255;
     
     // oldData[i]= depth
